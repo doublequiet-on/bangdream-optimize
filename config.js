@@ -7,7 +7,7 @@ const defaultApiBaseUrl = localDevelopment
 const currentConfig = globalThis.BANGDREAM_OPTIMIZE_CONFIG;
 
 globalThis.BANGDREAM_OPTIMIZE_CONFIG = {
-  gameDataBaseUrl: '/game-data',
+  gameDataBaseUrl: 'https://calc.krkrdkdk.cn/game-data',
   desktopDownloadsUrl: '/downloads/',
   apiBaseUrl: defaultApiBaseUrl,
   // Optional fixed-origin header PNG channel; defaults to apiBaseUrl (or same origin).
