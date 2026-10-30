@@ -1,0 +1,191 @@
+export function createPlayerStore({
+  state,
+  playerJson,
+  normalizePlayer,
+  cacheEventPresetFromCore,
+  activityModeForEvent,
+  ensureSongListForMode,
+  recentUnfinishedEvent,
+  customEventId,
+  defaultEditableEvent,
+  renderPlayerProfileControls,
+  onError,
+}) {
+  let cachedPlayerSourceText;
+  let cachedNormalizedPlayer;
+  let cachedNormalizedPlayerText;
+
+  function cachedPlayer() {
+    const text = playerJson.value;
+    if (cachedPlayerSourceText !== text) {
+      const normalized = normalizePlayer(JSON.parse(text));
+      cachedPlayerSourceText = text;
+      cachedNormalizedPlayer = normalized;
+      cachedNormalizedPlayerText = undefined;
+    }
+    return cachedNormalizedPlayer;
+  }
+
+  function readPlayer() {
+    const player = cachedPlayer();
+    cachedNormalizedPlayerText ??= JSON.stringify(player);
+    return JSON.parse(cachedNormalizedPlayerText);
+  }
+
+  function writePlayer(player, { autosave = true } = {}) {
+    const normalized = normalizedWritablePlayer(player);
+    const text = JSON.stringify(normalized, null, 2);
+    cachedPlayerSourceText = text;
+    cachedNormalizedPlayer = normalized;
+    cachedNormalizedPlayerText = JSON.stringify(normalized);
+    playerJson.value = text;
+    if (globalThis.document) document.dispatchEvent(new CustomEvent('player-config-change'));
+    if (autosave) {
+      schedulePlayerSave();
+    }
+  }
+
+  function schedulePlayerSave() {
+    if (!state.runtime) {
+      return;
+    }
+    state.playerSaveSequence += 1;
+    const sequence = state.playerSaveSequence;
+    clearTimeout(state.playerSaveTimer);
+    state.playerSaveTimer = setTimeout(() => {
+      if (sequence !== state.playerSaveSequence) {
+        return;
+      }
+      savePlayerNow().catch(onError);
+    }, 250);
+  }
+
+  function savePlayerNow(player = readPlayer()) {
+    clearTimeout(state.playerSaveTimer);
+    state.playerSaveSequence += 1;
+    const normalized = normalizedWritablePlayer(player);
+    const profileId = state.activePlayerProfileId;
+    state.playerSaveQueue = state.playerSaveQueue
+      .catch(() => {})
+      .then(() => state.runtime.savePlayerConfig(normalized, profileId));
+    return state.playerSaveQueue;
+  }
+
+  function cancelPendingSave() {
+    clearTimeout(state.playerSaveTimer);
+    state.playerSaveSequence += 1;
+    return state.playerSaveQueue.catch(() => {});
+  }
+
+  async function ensurePlayerProfiles(player) {
+    await refreshPlayerProfiles({ defaultPlayer: player });
+  }
+
+  async function refreshPlayerProfiles({ defaultPlayer } = {}) {
+    let result = await state.runtime.listPlayerConfigs();
+    let profiles = Array.isArray(result?.profiles) ? result.profiles : [];
+    let activeId = result?.activeId;
+
+    if (profiles.length === 0) {
+      await state.runtime.createPlayerConfig({
+        name: '默认配置',
+        player: normalizePlayer(defaultPlayer ?? safeReadPlayer()),
+      });
+      result = await state.runtime.listPlayerConfigs();
+      profiles = Array.isArray(result?.profiles) ? result.profiles : [];
+      activeId = result?.activeId;
+    }
+
+    if (profiles.length > 0 && !profiles.some((profile) => profile.id === activeId)) {
+      const selected = await state.runtime.selectPlayerConfig(profiles[0].id);
+      writePlayer(selected, { autosave: false });
+      result = await state.runtime.listPlayerConfigs();
+      profiles = Array.isArray(result?.profiles) ? result.profiles : [];
+      activeId = result?.activeId;
+    }
+
+    state.playerProfiles = profiles;
+    state.activePlayerProfileId = activeId;
+    renderPlayerProfileControls(readPlayer());
+  }
+
+  function safeReadPlayer() {
+    try {
+      return cachedPlayer();
+    } catch {
+      return normalizePlayer(state.runtime?.samplePlayerConfig?.() ?? {});
+    }
+  }
+
+  function normalizedWritablePlayer(player) {
+    const normalized = normalizePlayer(player);
+    cacheEventPresetFromCore(normalized, normalized.currentEvent);
+    syncActivityModeFromCurrentEvent(normalized);
+    syncSongListFromCurrentEvent(normalized);
+    return normalized;
+  }
+
+  function initializePlayerDefaults(player) {
+    const normalized = normalizePlayer(player);
+    if (normalized.currentEvent != null) {
+      return { player: normalized, changed: false };
+    }
+    const recent = recentUnfinishedEvent(state.core?.events, {
+      serverIndex: {jp:0,en:1,tw:2,cn:3,kr:4}[normalized.server] ?? 3,
+      calculationMode: normalized.calculationMode,
+    });
+    if (!recent) {
+      if (!defaultEditableEvent) return { player: normalized, changed: false };
+      normalized.currentEvent = customEventId;
+      normalized.eventOverrides ??= {};
+      const event = defaultEditableEvent(normalized.activityMode, normalized.calculationMode);
+      normalized.eventOverrides[customEventId] = event;
+      ensureSongListForMode(normalized, customEventId, event);
+      return { player: normalized, changed: true };
+    }
+
+    normalized.currentEvent = recent.id;
+    normalized.activityMode = activityModeForEvent(recent.event);
+    cacheEventPresetFromCore(normalized, recent.id);
+    ensureSongListForMode(normalized, recent.id, recent.event);
+    return { player: normalized, changed: true };
+  }
+
+  function currentEventForPlayer(player) {
+    const eventId = player.currentEvent;
+    if (eventId == null) {
+      return undefined;
+    }
+    const key = String(eventId);
+    return player.eventOverrides?.[key] ?? player.eventPresets?.[key];
+  }
+
+  function syncActivityModeFromCurrentEvent(player) {
+    const event = currentEventForPlayer(player);
+    if (event?.eventType) {
+      player.activityMode = activityModeForEvent(event);
+    }
+  }
+
+  function syncSongListFromCurrentEvent(player) {
+    if (player.currentEvent == null) {
+      return;
+    }
+    const event = currentEventForPlayer(player);
+    if (event) {
+      ensureSongListForMode(player, player.currentEvent, event);
+    }
+  }
+
+  return {
+    cancelPendingSave,
+    ensurePlayerProfiles,
+    initializePlayerDefaults,
+    peekPlayer: safeReadPlayer,
+    readPlayer,
+    refreshPlayerProfiles,
+    safeReadPlayer,
+    savePlayerNow,
+    writePlayer,
+  };
+}
