@@ -1,0 +1,28 @@
+name: Windows optimized preview
+on:
+  push:
+    branches: [build/preview-aa96105]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build native desktop
+        shell: pwsh
+        run: |
+          cargo build --release --locked --manifest-path apps/desktop/src-tauri/Cargo.toml
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          New-Item -ItemType Directory package
+          Copy-Item apps/desktop/src-tauri/target/release/bangdream-optimize-desktop-app.exe package/Bandori-Optimize-Preview.exe
+          Copy-Item LICENSE package/LICENSE
+          Set-Content package/README.txt 'Optimized preview aa96105. Run Bandori-Optimize-Preview.exe. Windows x64 with WebView2. Initial game data loading requires internet. PR: https://github.com/yyf-0404/bangdream-optimize/pull/2'
+          Compress-Archive package/* Bandori-Optimize-aa96105-windows-x64.zip
+      - name: Publish preview download
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create preview-aa96105 Bandori-Optimize-aa96105-windows-x64.zip --target aa96105e844b8c4222bca4b2f22256cb8750f87a --prerelease --title 'Medley optimization preview aa96105' --notes 'Experimental optimized build for PR yyf-0404/bangdream-optimize#2. Web preview: https://doublequiet-on.github.io/bangdream-optimize/ . First load needs internet; Windows requires WebView2.'
